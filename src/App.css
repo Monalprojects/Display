@@ -77,7 +77,7 @@ body {
 /* Login Form Styles - Updated to match the design */
 .main-login {
   min-height: 100vh;
-  background: url('/bg5.jpg') no-repeat center right/cover;
+  background: url('src/assets/bg5.jpg') no-repeat center right/cover;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -800,21 +800,17 @@ body {
 }
 
 .preview-display-controls {
-  position: absolute;
-  bottom: 20px;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 10px;
-  background: rgba(0, 0, 0, 0.8);
-  padding: 10px 15px;
-  border-radius: 25px;
-  backdrop-filter: blur(10px);
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: center;
-  max-width: 90%;
+    position: absolute;
+    bottom: 4px;
+    left: 30%;
+    transform: translateX(-50%);
+    display: flex;
+    gap: 4px;
+    background: rgba(0, 0, 0, 0.7);
+    padding: 7px;
+    border-radius: 50px;
+    backdrop-filter: blur(10px);
+    z-index: 10;
 }
 
 .control-group {

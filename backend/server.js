@@ -1,498 +1,529 @@
 const express = require('express');
 const mysql = require('mysql2/promise');
-const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
-const bcrypt = require('bcrypt');
+const fs = require('fs').promises;
+const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// MySQL connection configuration
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// Create uploads directory if it doesn't exist
+const ensureUploadDir = async () => {
+  try {
+    await fs.access(path.join(__dirname, 'uploads'));
+  } catch {
+    await fs.mkdir(path.join(__dirname, 'uploads'), { recursive: true });
+  }
+};
+
+// Database connection
 const dbConfig = {
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
   password: process.env.DB_PASSWORD || 'Admin@1234',
-  database: process.env.DB_NAME || 'signage_db',
+  database: process.env.DB_NAME || 'restaurant_admin',
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0
 };
 
-// Create MySQL connection pool
 const pool = mysql.createPool(dbConfig);
 
-// Middleware
-app.use(cors());
-app.use(express.json({ limit: '50mb' }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
-
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(__dirname, 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-  fs.mkdirSync(uploadsDir, { recursive: true });
-}
-
-// Serve uploaded files statically
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Test database connection
+const testConnection = async () => {
+  try {
+    const connection = await pool.getConnection();
+    console.log('✅ Database connected successfully');
+    connection.release();
+  } catch (error) {
+    console.error('❌ Database connection failed:', error.message);
+    process.exit(1);
+  }
+};
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, uploadsDir);
+  destination: async (req, file, cb) => {
+    await ensureUploadDir();
+    cb(null, 'uploads/');
   },
   filename: (req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+    const extension = path.extname(file.originalname);
+    const filename = `${uniqueSuffix}${extension}`;
+    cb(null, filename);
   }
 });
-const upload = multer({ 
-  dest: 'backend/uploads',
+
+const upload = multer({
   storage: storage,
   limits: {
-    fileSize: 50 * 1024 * 1024 // 50MB limit
+    fileSize: 100 * 1024 * 1024 // 100MB limit
   },
   fileFilter: (req, file, cb) => {
-    const allowedTypes = /jpeg|jpg|png|gif|mp4|avi|mov|wmv|webm|pdf/;
+    // Accept images, videos, and PDFs
+    const allowedTypes = /jpeg|jpg|png|gif|mp4|avi|mov|webm|pdf/;
     const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
     const mimetype = allowedTypes.test(file.mimetype);
     
     if (mimetype && extname) {
       return cb(null, true);
     } else {
-      cb(new Error('Only image, video, and PDF files are allowed'));
+      cb(new Error('Only images, videos, and PDF files are allowed'));
     }
   }
 });
 
-// Default password function (no hashing)
-const defaultPassword = (password) => {
-  return password; // Return password as-is without hashing
+// Utility function to handle database errors
+const handleDbError = (error, res, message = 'Database error') => {
+  console.error(message + ':', error);
+  res.status(500).json({ error: message, details: error.message });
 };
 
-// Initialize database tables
-async function initializeDatabase() {
-  try {
-    const connection = await pool.getConnection();
-    
-    // Users table
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        username VARCHAR(255) UNIQUE NOT NULL,
-        password VARCHAR(255) NOT NULL,
-        role VARCHAR(50) DEFAULT 'admin',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+// RESTAURANTS API ROUTES
 
-    // Media files table
-    await connection.execute(`
-      CREATE TABLE IF NOT EXISTS media_files (
-        id INT AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        original_name VARCHAR(255) NOT NULL,
-        type VARCHAR(50) NOT NULL,
-        file_path VARCHAR(500) NOT NULL,
-        url VARCHAR(500) NOT NULL,
-        size BIGINT NOT NULL,
-        duration INT DEFAULT 5,
-        priority INT DEFAULT 0,
-        status VARCHAR(20) DEFAULT 'active',
-        start_date DATE,
-        end_date DATE,
-        upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        user_id INT,
-        FOREIGN KEY (user_id) REFERENCES users (id)
-      )
-    `);
-
-    // Create default admin user
-    const defaultUsername = 'admin';
-    const defaultPass = defaultPassword('admin123');
-    
-    const [rows] = await connection.execute(
-      'SELECT * FROM users WHERE username = ?', 
-      [defaultUsername]
-    );
-    
-    if (rows.length === 0) {
-      await connection.execute(
-        'INSERT INTO users (username, password, role) VALUES (?, ?, ?)', 
-        [defaultUsername, defaultPass, 'admin']
-      );
-      console.log('Default admin user created');
-    }
-
-    connection.release();
-    console.log('Database initialized successfully');
-  } catch (error) {
-    console.error('Error initializing database:', error.message);
-    process.exit(1);
-  }
-}
-
-// Test database connection and initialize
-async function connectToDatabase() {
-  try {
-    const connection = await pool.getConnection();
-    console.log('Connected to MySQL database');
-    connection.release();
-    await initializeDatabase();
-  } catch (error) {
-    console.error('Error connecting to database:', error.message);
-    console.error('Please make sure MySQL is running and the database exists');
-    process.exit(1);
-  }
-}
-
-// Initialize database connection
-connectToDatabase();
-
-// Authentication Routes
-app.post('/api/auth/login', async (req, res) => {
-  const { username, password } = req.body;
-
-  if (!username || !password) {
-    return res.status(400).json({ error: 'Username and password are required' });
-  }
-
+// Get all restaurants
+app.get('/api/restaurants', async (req, res) => {
   try {
     const [rows] = await pool.execute(
-      'SELECT * FROM users WHERE username = ?', 
-      [username]
+      'SELECT * FROM restaurants ORDER BY created_at DESC'
     );
-
-    if (rows.length === 0) {
-      return res.status(401).json({ error: 'Invalid credentials' });
-    }
-
-    const user = rows[0];
-
-    // Compare password directly (no hashing)
-    if (password === user.password) {
-      res.json({
-        success: true,
-        user: {
-          id: user.id,
-          username: user.username,
-          role: user.role
-        }
-      });
-    } else {
-      res.status(401).json({ error: 'Invalid credentials' });
-    }
+    res.json(rows);
   } catch (error) {
-    console.error('Database error:', error.message);
-    res.status(500).json({ error: 'Internal server error' });
+    handleDbError(error, res, 'Error fetching restaurants');
   }
 });
 
-// Media Files Routes
+// Get single restaurant
+app.get('/api/restaurants/:id', async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT * FROM restaurants WHERE id = ?',
+      [req.params.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Restaurant not found' });
+    }
+    res.json(rows[0]);
+  } catch (error) {
+    handleDbError(error, res, 'Error fetching restaurant');
+  }
+});
+
+// Create restaurant
+app.post('/api/restaurants', upload.single('image_path'), async (req, res) => {
+  try {
+    const { name, start_time, end_time, description, cuisine, rating } = req.body;
+    
+    // Validate required fields
+    if (!name || !start_time || !end_time || !cuisine) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    let imagePath = null;
+    if (req.file) {
+      imagePath = `/uploads/${req.file.filename}`;
+    }
+
+    const [result] = await pool.execute(
+      'INSERT INTO restaurants (name, start_time, end_time, description, cuisine, rating, image_path) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      [name, start_time, end_time, description || '', cuisine, rating || 5, imagePath]
+    );
+
+    // Fetch the created restaurant
+    const [newRestaurant] = await pool.execute(
+      'SELECT * FROM restaurants WHERE id = ?',
+      [result.insertId]
+    );
+
+    res.status(201).json(newRestaurant[0]);
+  } catch (error) {
+    handleDbError(error, res, 'Error creating restaurant');
+  }
+});
+
+// Update restaurant
+app.put('/api/restaurants/:id', upload.single('image_path'), async (req, res) => {
+  try {
+    const { name, start_time, end_time, description, cuisine, rating } = req.body;
+    const restaurantId = req.params.id;
+
+    // Check if restaurant exists
+    const [existing] = await pool.execute(
+      'SELECT * FROM restaurants WHERE id = ?',
+      [restaurantId]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Restaurant not found' });
+    }
+
+    let imagePath = existing[0].image_path;
+    if (req.file) {
+      // Delete old image if it exists
+      if (existing[0].image_path) {
+        try {
+          await fs.unlink(path.join(__dirname, existing[0].image_path));
+        } catch (err) {
+          console.log('Could not delete old image:', err.message);
+        }
+      }
+      imagePath = `/uploads/${req.file.filename}`;
+    }
+
+    await pool.execute(
+      'UPDATE restaurants SET name = ?, start_time = ?, end_time = ?, description = ?, cuisine = ?, rating = ?, image_path = ? WHERE id = ?',
+      [name, start_time, end_time, description || '', cuisine, rating || 5, imagePath, restaurantId]
+    );
+
+    // Fetch updated restaurant
+    const [updatedRestaurant] = await pool.execute(
+      'SELECT * FROM restaurants WHERE id = ?',
+      [restaurantId]
+    );
+
+    res.json(updatedRestaurant[0]);
+  } catch (error) {
+    handleDbError(error, res, 'Error updating restaurant');
+  }
+});
+
+// Delete restaurant
+app.delete('/api/restaurants/:id', async (req, res) => {
+  try {
+    const restaurantId = req.params.id;
+
+    // Get restaurant details for file cleanup
+    const [restaurant] = await pool.execute(
+      'SELECT * FROM restaurants WHERE id = ?',
+      [restaurantId]
+    );
+
+    if (restaurant.length === 0) {
+      return res.status(404).json({ error: 'Restaurant not found' });
+    }
+
+    // Delete associated image file
+    if (restaurant[0].image_path) {
+      try {
+        await fs.unlink(path.join(__dirname, restaurant[0].image_path));
+      } catch (err) {
+        console.log('Could not delete image file:', err.message);
+      }
+    }
+
+    // Delete restaurant
+    await pool.execute('DELETE FROM restaurants WHERE id = ?', [restaurantId]);
+
+    res.json({ message: 'Restaurant deleted successfully' });
+  } catch (error) {
+    handleDbError(error, res, 'Error deleting restaurant');
+  }
+});
+
+// DINING EVENTS API ROUTES
+
+// Get all dining events
+app.get('/api/dining-events', async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT * FROM dining_events ORDER BY created_at DESC'
+    );
+    res.json(rows);
+  } catch (error) {
+    handleDbError(error, res, 'Error fetching dining events');
+  }
+});
+
+// Get single dining event
+app.get('/api/dining-events/:id', async (req, res) => {
+  try {
+    const [rows] = await pool.execute(
+      'SELECT * FROM dining_events WHERE id = ?',
+      [req.params.id]
+    );
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Dining event not found' });
+    }
+    res.json(rows[0]);
+  } catch (error) {
+    handleDbError(error, res, 'Error fetching dining event');
+  }
+});
+
+// Create dining event
+app.post('/api/dining-events', async (req, res) => {
+  try {
+    const { eventname, cuisine, start_time, end_time, day, restaurant_id } = req.body;
+
+    // Validate required fields
+    if (!eventname || !cuisine || !start_time || !end_time || !day) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const [result] = await pool.execute(
+      'INSERT INTO dining_events (eventname, cuisine, start_time, end_time, day, restaurant_id) VALUES (?, ?, ?, ?, ?, ?)',
+      [eventname, cuisine, start_time, end_time, day, restaurant_id || null]
+    );
+
+    // Fetch the created dining event
+    const [newEvent] = await pool.execute(
+      'SELECT * FROM dining_events WHERE id = ?',
+      [result.insertId]
+    );
+
+    res.status(201).json(newEvent[0]);
+  } catch (error) {
+    handleDbError(error, res, 'Error creating dining event');
+  }
+});
+
+// Update dining event
+app.put('/api/dining-events/:id', async (req, res) => {
+  try {
+    const { eventname, cuisine, start_time, end_time, day, restaurant_id } = req.body;
+    const eventId = req.params.id;
+
+    // Check if event exists
+    const [existing] = await pool.execute(
+      'SELECT * FROM dining_events WHERE id = ?',
+      [eventId]
+    );
+
+    if (existing.length === 0) {
+      return res.status(404).json({ error: 'Dining event not found' });
+    }
+
+    await pool.execute(
+      'UPDATE dining_events SET eventname = ?, cuisine = ?, start_time = ?, end_time = ?, day = ?, restaurant_id = ? WHERE id = ?',
+      [eventname, cuisine, start_time, end_time, day, restaurant_id || null, eventId]
+    );
+
+    // Fetch updated event
+    const [updatedEvent] = await pool.execute(
+      'SELECT * FROM dining_events WHERE id = ?',
+      [eventId]
+    );
+
+    res.json(updatedEvent[0]);
+  } catch (error) {
+    handleDbError(error, res, 'Error updating dining event');
+  }
+});
+
+// Delete dining event
+app.delete('/api/dining-events/:id', async (req, res) => {
+  try {
+    const eventId = req.params.id;
+
+    const [result] = await pool.execute(
+      'DELETE FROM dining_events WHERE id = ?',
+      [eventId]
+    );
+
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ error: 'Dining event not found' });
+    }
+
+    res.json({ message: 'Dining event deleted successfully' });
+  } catch (error) {
+    handleDbError(error, res, 'Error deleting dining event');
+  }
+});
+
+// MEDIA FILES API ROUTES
 
 // Get all media files
 app.get('/api/media', async (req, res) => {
-  const query = `
-    SELECT 
-      id, name, original_name, type, file_path, url, size, 
-      duration, priority, status, start_date, end_date, upload_time
-    FROM media_files 
-    ORDER BY upload_time DESC
-  `;
-  
   try {
-    const [rows] = await pool.execute(query);
+    const [rows] = await pool.execute(
+      'SELECT * FROM media_files ORDER BY created_at DESC'
+    );
     res.json(rows);
   } catch (error) {
-    console.error('Error fetching media files:', error.message);
-    res.status(500).json({ error: 'Internal server error' });
+    handleDbError(error, res, 'Error fetching media files');
   }
 });
 
 // Upload media files
-app.post('/api/media/upload', upload.array('files'), async (req, res) => {
+app.post('/api/media/upload', upload.array('files', 10), async (req, res) => {
   try {
-    console.log('Upload request received');
-    console.log('Files:', req.files);
-    console.log('Body:', req.body);
-
     if (!req.files || req.files.length === 0) {
       return res.status(400).json({ error: 'No files uploaded' });
     }
 
-    // Parse settings from form data
-    let settings = {};
-    try {
-      if (req.body.settings) {
-        settings = JSON.parse(req.body.settings);
-      }
-    } catch (e) {
-      console.error('Error parsing settings:', e);
-      // Fallback to individual fields
-      settings = {
-        duration: req.body.duration || 30,
-        priority: req.body.priority || 0,
-        startDate: req.body.startDate || null,
-        endDate: req.body.endDate || null
-      };
-    }
+    const uploadedFiles = [];
+    
+    for (let i = 0; i < req.files.length; i++) {
+      const file = req.files[i];
+      const location = req.body.locations ? req.body.locations[i] : '';
+      const restaurant = req.body.restaurants ? req.body.restaurants[i] : '';
+      const mediaType = req.body.mediaTypes ? req.body.mediaTypes[i] : '';
 
-    const { duration = 30, priority = 0, startDate, endDate } = settings;
-
-    const insertPromises = req.files.map(async (file) => {
-      console.log('Processing file:', file.filename);
-      
-      let fileType = 'unknown';
-if (file.mimetype.startsWith('image/')) {
-  fileType = 'image';
-} else if (file.mimetype.startsWith('video/')) {
-  fileType = 'video';
-} else if (file.mimetype === 'application/pdf') {
-  fileType = 'pdf';
-}
-
-      const fileUrl = `http://localhost:5000/uploads/${file.filename}`;
-
-      const query = `
-        INSERT INTO media_files 
-        (name, original_name, type, file_path, url, size, duration, priority, status, start_date, end_date)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?)
-      `;
-      
-      try {
-        const [result] = await pool.execute(query, [
+      const [result] = await pool.execute(
+        'INSERT INTO media_files (name, original_name, file_path, file_type, file_size, location, restaurant, media_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [
           file.filename,
           file.originalname,
-          fileType,
-          file.path,
-          fileUrl,
+          `/uploads/${file.filename}`,
+          file.mimetype,
           file.size,
-          parseInt(duration),
-          parseInt(priority),
-          startDate || null,
-          endDate || null
-        ]);
+          location || '',
+          restaurant || '',
+          mediaType || ''
+        ]
+      );
 
-        console.log('File inserted with ID:', result.insertId);
-        return {
-          id: result.insertId,
-          name: file.filename,
-          original_name: file.originalname,
-          type: fileType,
-          url: fileUrl,
-          size: file.size,
-          duration: parseInt(duration),
-          priority: parseInt(priority),
-          status: 'active',
-          start_date: startDate || null,
-          end_date: endDate || null,
-          upload_time: new Date().toISOString()
-        };
-      } catch (error) {
-        console.error('Database insertion error:', error);
-        throw error;
-      }
-    });
+      // Fetch the created media file
+      const [newFile] = await pool.execute(
+        'SELECT * FROM media_files WHERE id = ?',
+        [result.insertId]
+      );
 
-    const results = await Promise.all(insertPromises);
-    console.log('All files processed successfully:', results.length);
-    res.json({
-      success: true,
-      files: results
-    });
+      uploadedFiles.push(newFile[0]);
+    }
 
+    res.status(201).json(uploadedFiles);
   } catch (error) {
-    console.error('Upload error:', error.message);
-    res.status(500).json({ error: 'Upload failed: ' + error.message });
-  }
-});
-
-// Update media file - ENHANCED VERSION with partial updates
-app.put('/api/media/:id', async (req, res) => {
-  const { id } = req.params;
-  const { duration, priority, start_date, end_date, status } = req.body;
-
-  // Validate ID
-  const mediaId = parseInt(id);
-  if (isNaN(mediaId)) {
-    return res.status(400).json({ error: 'Invalid media ID' });
-  }
-
-  try {
-    // First, get the current record to handle partial updates
-    const [currentRows] = await pool.execute(
-      'SELECT duration, priority, start_date, end_date, status FROM media_files WHERE id = ?',
-      [mediaId]
-    );
-
-    if (currentRows.length === 0) {
-      return res.status(404).json({ error: 'Media file not found' });
-    }
-
-    const currentData = currentRows[0];
-
-    // Use existing values if new ones are not provided
-    const safeDuration = duration !== undefined && duration !== null ? parseInt(duration) : currentData.duration;
-    const safePriority = priority !== undefined && priority !== null ? parseInt(priority) : currentData.priority;
-    const safeStartDate = start_date !== undefined ? (start_date || null) : currentData.start_date;
-    const safeEndDate = end_date !== undefined ? (end_date || null) : currentData.end_date;
-    const safeStatus = status !== undefined && status !== null ? status : currentData.status;
-
-    // Validate numeric values
-    if (isNaN(safeDuration) || safeDuration < 1) {
-      return res.status(400).json({ error: 'Duration must be a positive number' });
-    }
-
-    if (isNaN(safePriority)) {
-      return res.status(400).json({ error: 'Priority must be a number' });
-    }
-
-    // Validate status
-    if (!['active', 'inactive'].includes(safeStatus)) {
-      return res.status(400).json({ error: 'Status must be either "active" or "inactive"' });
-    }
-
-    const query = `
-      UPDATE media_files 
-      SET duration = ?, priority = ?, start_date = ?, end_date = ?, status = ?
-      WHERE id = ?
-    `;
-
-    const [result] = await pool.execute(query, [
-      safeDuration,
-      safePriority,
-      safeStartDate,
-      safeEndDate,
-      safeStatus,
-      mediaId
-    ]);
-
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Media file not found' });
-    }
-
-    // Return the updated data
-    const [updatedRows] = await pool.execute(
-      'SELECT id, name, original_name, type, file_path, url, size, duration, priority, status, start_date, end_date, upload_time FROM media_files WHERE id = ?',
-      [mediaId]
-    );
-
-    res.json({ 
-      success: true, 
-      data: updatedRows[0] 
-    });
-
-  } catch (error) {
-    console.error('Error updating media file:', error.message);
-    res.status(500).json({ error: 'Internal server error' });
+    handleDbError(error, res, 'Error uploading media files');
   }
 });
 
 // Delete media file
 app.delete('/api/media/:id', async (req, res) => {
-  const { id } = req.params;
-
   try {
-    // First get the file info to delete the physical file
-    const [rows] = await pool.execute(
-      'SELECT file_path FROM media_files WHERE id = ?', 
-      [id]
+    const mediaId = req.params.id;
+
+    // Get media file details for file cleanup
+    const [mediaFile] = await pool.execute(
+      'SELECT * FROM media_files WHERE id = ?',
+      [mediaId]
     );
 
-    if (rows.length === 0) {
-      return res.status(404).json({ error: 'Media file not found' });
-    }
-
-    const filePath = rows[0].file_path;
-
-    // Delete from database
-    const [result] = await pool.execute('DELETE FROM media_files WHERE id = ?', [id]);
-
-    if (result.affectedRows === 0) {
+    if (mediaFile.length === 0) {
       return res.status(404).json({ error: 'Media file not found' });
     }
 
     // Delete physical file
-    if (fs.existsSync(filePath)) {
-      fs.unlink(filePath, (err) => {
-        if (err) {
-          console.error('Error deleting physical file:', err.message);
-        }
-      });
+    if (mediaFile[0].file_path) {
+      try {
+        await fs.unlink(path.join(__dirname, mediaFile[0].file_path));
+      } catch (err) {
+        console.log('Could not delete media file:', err.message);
+      }
     }
 
-    res.json({ success: true });
+    // Delete from database
+    await pool.execute('DELETE FROM media_files WHERE id = ?', [mediaId]);
+
+    res.json({ message: 'Media file deleted successfully' });
   } catch (error) {
-    console.error('Error deleting media file:', error.message);
-    res.status(500).json({ error: 'Internal server error' });
+    handleDbError(error, res, 'Error deleting media file');
   }
 });
 
-// Toggle media file status
-app.patch('/api/media/:id/toggle-status', async (req, res) => {
-  const { id } = req.params;
-
+// Update media file metadata
+app.put('/api/media/:id', async (req, res) => {
   try {
-    // First get current status
-    const [rows] = await pool.execute(
-      'SELECT status FROM media_files WHERE id = ?', 
-      [id]
+    const { location, restaurant, media_type } = req.body;
+    const mediaId = req.params.id;
+
+    // Check if media file exists
+    const [existing] = await pool.execute(
+      'SELECT * FROM media_files WHERE id = ?',
+      [mediaId]
     );
 
-    if (rows.length === 0) {
+    if (existing.length === 0) {
       return res.status(404).json({ error: 'Media file not found' });
     }
 
-    const newStatus = rows[0].status === 'active' ? 'inactive' : 'active';
-
-    const [result] = await pool.execute(
-      'UPDATE media_files SET status = ? WHERE id = ?', 
-      [newStatus, id]
+    await pool.execute(
+      'UPDATE media_files SET location = ?, restaurant = ?, media_type = ? WHERE id = ?',
+      [location || '', restaurant || '', media_type || '', mediaId]
     );
 
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ error: 'Media file not found' });
-    }
+    // Fetch updated media file
+    const [updatedFile] = await pool.execute(
+      'SELECT * FROM media_files WHERE id = ?',
+      [mediaId]
+    );
 
-    res.json({ success: true, status: newStatus });
+    res.json(updatedFile[0]);
   } catch (error) {
-    console.error('Error updating status:', error.message);
-    res.status(500).json({ error: 'Internal server error' });
+    handleDbError(error, res, 'Error updating media file');
   }
 });
 
-// Health check route
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'OK', timestamp: new Date().toISOString() });
+// Health check endpoint
+app.get('/api/health', async (req, res) => {
+  try {
+    const [rows] = await pool.execute('SELECT 1');
+    res.json({ 
+      status: 'healthy', 
+      database: 'connected',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      status: 'unhealthy', 
+      database: 'disconnected',
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
 });
 
 // Error handling middleware
 app.use((error, req, res, next) => {
+  console.error('Unhandled error:', error);
+  
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
       return res.status(400).json({ error: 'File too large' });
     }
+    return res.status(400).json({ error: error.message });
   }
   
-  console.error('Unexpected error:', error);
   res.status(500).json({ error: 'Internal server error' });
 });
 
-// Start server
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  console.log(`API endpoints available at http://localhost:${PORT}/api`);
+// 404 handler
+app.use((req, res) => {
+  res.status(404).json({ error: 'Route not found' });
 });
+
+// Initialize server
+const startServer = async () => {
+  try {
+    await ensureUploadDir();
+    await testConnection();
+    
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📱 Health check: http://localhost:${PORT}/api/health`);
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+};
 
 // Graceful shutdown
 process.on('SIGINT', async () => {
-  console.log('\nShutting down server...');
-  try {
-    await pool.end();
-    console.log('Database connection pool closed');
-  } catch (error) {
-    console.error('Error closing database pool:', error.message);
-  }
+  console.log('\n🔄 Shutting down server...');
+  await pool.end();
   process.exit(0);
 });
+
+startServer();
