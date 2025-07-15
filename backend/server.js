@@ -508,11 +508,6 @@ const startServer = async () => {
   try {
     await ensureUploadDir();
     await testConnection();
-    
-    app.listen(PORT, () => {
-      console.log(`🚀 Server running on port ${PORT}`);
-      console.log(`📱 Health check: http://localhost:${PORT}/api/health`);
-    });
   } catch (error) {
     console.error('Failed to start server:', error);
     process.exit(1);
@@ -526,4 +521,8 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-startServer();
+module.exports = async (req, res) => {
+  await ensureUploadDir();
+  await testConnection();
+  return app(req, res);
+};
