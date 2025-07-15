@@ -3,17 +3,20 @@ CREATE DATABASE IF NOT EXISTS restaurant_admin;
 USE restaurant_admin;
 
 -- Create media_files table
-CREATE TABLE IF NOT EXISTS media_files (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    original_name VARCHAR(255) NOT NULL,
-    file_path VARCHAR(500) NOT NULL,
-    file_type VARCHAR(100) NOT NULL,
-    file_size BIGINT NOT NULL,
-    duration INT DEFAULT 30,
-    location VARCHAR(255) DEFAULT '',
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+CREATE TABLE IF NOT EXISTS `media_files` (
+  `id` int NOT NULL AUTO_INCREMENT,
+  `name` varchar(255) NOT NULL,
+  `original_name` varchar(255) NOT NULL,
+  `file_path` varchar(500) NOT NULL,
+  `file_type` varchar(100) NOT NULL,
+  `file_size` bigint NOT NULL,
+  `duration` int DEFAULT '30',
+  `location` varchar(255) DEFAULT '',
+  `created_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` timestamp NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  `restaurant` varchar(255) DEFAULT '',
+  `media_type` varchar(100) DEFAULT '',
+  PRIMARY KEY (`id`)
 );
 
 -- Create restaurants table
@@ -43,3 +46,7 @@ CREATE TABLE IF NOT EXISTS dining_events (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     FOREIGN KEY (restaurant_id) REFERENCES restaurants(id) ON DELETE SET NULL
 );
+
+INSERT INTO users (username, password, role) 
+VALUES ('admin', '$2y$10$DW0MfM2SpZ9NSgKvohMK5OBqYO6bzSkD4EOANjkK6A3w61JvwzN2C', 'admin'); 
+-- password: admin123
