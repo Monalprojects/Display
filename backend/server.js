@@ -521,8 +521,4 @@ process.on('SIGINT', async () => {
   process.exit(0);
 });
 
-module.exports = async (req, res) => {
-  await ensureUploadDir();
-  await testConnection();
-  return app(req, res);
-};
+startServer();
